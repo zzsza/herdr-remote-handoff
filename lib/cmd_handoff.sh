@@ -382,6 +382,8 @@ ho_cmd_handoff() {
 
   local settings="$(ho_remote_tree)/.handoff/claude-settings.json"
   if [ "$runtime" = "claude" ]; then
+    ho_remote_trust_project "$host" "$remote_path" >/dev/null 2>&1 \
+      || ho_warn "폴더 신뢰 선기록 실패. trust 대화상자에서 멈추면 herdr --remote $host 로 붙어 수락하세요."
     if ! ho_remote_agent_start "$host" "$pane" "$label" "$uuid" "$settings" "$instruction"; then
       ho_err "원격 자율 세션 기동에 실패했습니다 (workspace $ws)."
       ho_say "  handoff 재실행 또는 handback 으로 회수하세요."
