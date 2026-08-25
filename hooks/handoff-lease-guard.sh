@@ -35,6 +35,17 @@ EOF
 [ -n "${cwd:-}" ] || pass
 [ -d "$cwd" ] || pass
 
+# 세션 비컨: 이 cwd 에서 마지막으로 프롬프트를 제출한 세션 uuid 를 기록한다.
+# herdr 밖(일반 터미널)에서 시작한 세션은 herdr agent list 로 찾을 수 없어
+# handoff 가 HO_SESSION_UUID 수동 지정을 요구하는데, 이 기록이 그 대체 경로다
+# (ho_current_session_uuid 의 폴백). 차단 판정과 무관하게 항상 기록하고,
+# 실패해도 조용히 계속한다 - 원칙 4(훅 버그가 사용자를 막으면 안 된다)와 같다.
+if [ -n "${session_id:-}" ] && [ "$session_id" != "-" ]; then
+  beacon_dir="$HOME/.local/state/handoff/last-session"
+  mkdir -p "$beacon_dir" 2>/dev/null \
+    && printf '%s\n' "$session_id" > "$beacon_dir/${cwd//\//-}" 2>/dev/null || true
+fi
+
 # 프로젝트 루트를 찾아 리스를 읽는다 (git 최상위 우선, 없으면 상위로 탐색)
 root=""
 if top="$(cd "$cwd" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)"; then
