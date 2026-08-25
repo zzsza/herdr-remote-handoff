@@ -155,6 +155,37 @@ ho_remote_agent_state() {
   return 0
 }
 
+# 폴더 신뢰 선기록.
+# bypassPermissions 도 첫 실행의 폴더 신뢰 대화상자는 건너뛰지 않아서, 새 프로젝트의
+# 첫 handoff 마다 자율 기동이 trust 프롬프트에 막혀 startup timeout(exit 5)이 된다.
+# 방금 로컬에서 전송한 트리라 신뢰 판단은 이미 성립했으므로, 기동 전에 원격
+# ~/.claude.json 에 수락을 기록한다. 수락 기록은 실경로 키로 남지만(세션은 심링크
+# 경로로 뜬다) 확실하게 둘 다 기록한다.
+# 실패해도 기동은 계속한다. 그 경우 종전처럼 trust 대화상자에서 멈출 뿐이다.
+ho_remote_trust_project() {
+  local host="$1" path="$2"
+  ho_ssh "$host" "python3 - $(ho_shq "$path") <<'PY'
+import json, os, sys
+path = sys.argv[1]
+cfg = os.path.expanduser('~/.claude.json')
+d = {}
+if os.path.exists(cfg):
+    with open(cfg) as f:
+        d = json.load(f)
+projects = d.setdefault('projects', {})
+for p in {path, os.path.realpath(path)}:
+    projects.setdefault(p, {})['hasTrustDialogAccepted'] = True
+tmp = cfg + '.handoff-tmp'
+# 고정 경로의 임시 파일이 심링크면 그 대상을 잘라버린다. 지우고 배타 생성한다.
+if os.path.islink(tmp) or os.path.exists(tmp):
+    os.unlink(tmp)
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+with os.fdopen(fd, 'w') as f:
+    json.dump(d, f, ensure_ascii=False, indent=2)
+os.replace(tmp, cfg)
+PY"
+}
+
 # 자율 세션 기동 (D-17, D-18, D-41).
 # ho_remote_agent_start <host> <pane_id> <name> <session_uuid> <settings_path> <prompt>
 # -p 로 띄우면 안 된다. 헤드리스 1회 실행이라 끝나면 대화가 남지 않고,
@@ -193,6 +224,13 @@ ho_remote_codex_start() {
   local host="$1" pane="$2" name="$3" prompt="$4"
   ho_ssh "$host" "herdr agent start $(ho_shq "$name") --kind codex --pane $(ho_shq "$pane") -- \
     --dangerously-bypass-approvals-and-sandbox" || return 1
+  # Codex 는 기동 직후 시작 화면을 그리는 동안 입력을 받지 못하는데, herdr 는 그
+  # 스피너를 working 으로 오인한다. 그래서 --until working 만으로는 지시문 유실을
+  # 못 거른다(실기계에서 재현: agent_prompted 성공 보고 뒤 입력창이 비어 있음).
+  # 입력 가능(idle)을 먼저 확인한 뒤에 넣는다. 확인 실패면 넣지 않고 실패를 반환한다 -
+  # 유실된 채 성공 보고하는 것보다 exit 5 로 드러나는 쪽이 낫다.
+  ho_ssh "$host" "herdr agent wait $(ho_shq "$name") --until idle --timeout 20000" >/dev/null 2>&1 \
+    || return 1
   ho_remote_agent_prompt "$host" "$name" "$prompt"
 }
 
