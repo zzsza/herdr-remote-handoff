@@ -1,0 +1,13 @@
+# PRD 파이프라인 산출물과 런타임 상태.
+# 이 저장소를 만든 과정의 내부 기록이라 배포 대상이 아니고,
+# 실기계 경로와 호스트명이 그대로 들어 있다. 로컬에만 둔다.
+agents/
+
+# 실기계 검증 기록. 같은 이유로 로컬에만 둔다.
+docs/evidence/
+
+# 로컬 설정
+.handoffrc
+.handoff-lease
+.handoff-lock/
+.DS_Store

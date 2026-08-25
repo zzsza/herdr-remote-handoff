@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# handoff - 로컬 맥 <-> 원격 머신 세션/작업환경 핸드오프
+#
+# 서브커맨드: handoff | handback | status | clean | bootstrap
+# argv[0] 이 handback 이면 handback 으로 동작한다 (심링크 편의).
+
+set -uo pipefail
+
+# 심링크로 호출될 수 있으므로(~/.local/bin/handoff) 실제 파일 경로까지 따라간다.
+# macOS 의 readlink 에는 -f 가 없어 직접 반복한다.
+_ho_self="${BASH_SOURCE[0]}"
+while [ -L "$_ho_self" ]; do
+  _ho_link="$(readlink "$_ho_self")"
+  case "$_ho_link" in
+    /*) _ho_self="$_ho_link" ;;
+    *)  _ho_self="$(cd "$(dirname "$_ho_self")" && pwd)/$_ho_link" ;;
+  esac
+done
+HO_ROOT="$(cd "$(dirname "$_ho_self")/.." && pwd)"
+unset _ho_self _ho_link
+
+# shellcheck source=../lib/common.sh
+. "$HO_ROOT/lib/common.sh"
+. "$HO_ROOT/lib/config.sh"
+. "$HO_ROOT/lib/filelist.sh"
+. "$HO_ROOT/lib/lease.sh"
+. "$HO_ROOT/lib/remote.sh"
+. "$HO_ROOT/lib/transfer.sh"
+. "$HO_ROOT/lib/cmd_bootstrap.sh"
+. "$HO_ROOT/lib/cmd_handoff.sh"
+. "$HO_ROOT/lib/cmd_handback.sh"
+. "$HO_ROOT/lib/cmd_status_clean.sh"
+
+ho_usage() {
+  cat >&2 <<'USAGE'
+handoff - 로컬과 원격 머신 사이의 Claude 세션/작업환경 핸드오프
+
+사용법:
+  handoff [옵션] "<지시문>"     현재 세션과 프로젝트를 원격에 넘기고 자율 실행
+  handback [옵션]               원격에서 회수하고 리스를 반환
+  handoff status                현재 프로젝트 상태 요약
+  handoff clean [옵션]          보존 기간이 지난 원격 트리와 백업 정리
+  handoff candidates            gitignore된 전송 후보를 "<bytes>\t<경로>" 로 출력
+  handoff include <경로>...     그 파일을 전송 대상으로 기록
+  handoff exclude <경로>...     그 파일을 전송 제외로 기록
+  handoff bootstrap             원격 준비 상태를 검사하고 미완료분을 수행
+
+옵션 (모든 기본값은 .handoffrc 와 ~/.config/handoff/config.toml 로도 지정 가능):
+  --to <host>                   원격 대상 (기본 mini, ~/.ssh/config 의 Host 별칭)
+  --remote-tree <path>          핸드오프 트리 절대경로 (기본: 로컬 $HOME)
+  --remote-tree-target <path>   원격에서 그 경로가 가리킬 실제 디렉터리
+                                (기본: 원격 홈을 조회해 <원격 홈>/.handoff-tree)
+  --deny-extra <a,b>            원격 자율 세션에서 추가로 차단할 경로
+  --include <a,b>               gitignore되어도 전송할 패턴
+  --exclude <a,b>               항상 제외할 패턴
+  --secrets <a,b>               회수 직후 원격에서 지울 패턴
+  --tree-retention <days>       원격 트리 보존 일수
+  --backup-retention <days>     백업 보존 일수
+  --size-confirm <bytes>        확인을 요구할 전송량 임계치
+  --free-warn <gib>             여유 공간 경고 임계치
+  --older-than <days>           clean 전용, 트리 보존 일수 덮어쓰기
+  --codex                       Codex 경로로 handoff (파일만 + 새 세션)
+  --yes / --no                  확인 자동 승인 / 자동 거절
+  --force                       handoff 에서만 유효. 리스가 원격일 때 덮어쓴다
+                                (원격 세션을 먼저 백업한다). handback 의 확인은
+                                --force 로 우회되지 않는다
+
+종료 코드:
+  0 성공 / 1 사용 오류 / 3 사전조건 중단 / 4 전송 실패(재실행 안전)
+  5 리스 갱신 후 원격 기동 실패(상태 보존) / 6 정리 부분 실패
+USAGE
+}
+
+cmd=""
+case "$(basename "$0")" in
+  handback) cmd="handback" ;;
+esac
+
+args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    handoff|handback|status|clean|bootstrap|candidates|include|exclude)
+      [ -z "$cmd" ] && cmd="$1" || args+=("$1"); shift ;;
+    --to)               ho_config_set_flag remote "$2"; shift 2 ;;
+    --remote-tree)      ho_config_set_flag remote_tree "$2"; shift 2 ;;
+    --remote-tree-target) ho_config_set_flag remote_tree_target "$2"; shift 2 ;;
+    --deny-extra)       ho_config_set_flag deny_extra "$2"; shift 2 ;;
+    --include)          ho_config_set_flag include "$2"; shift 2 ;;
+    --exclude)          ho_config_set_flag exclude "$2"; shift 2 ;;
+    --secrets)          ho_config_set_flag secrets "$2"; shift 2 ;;
+    --tree-retention)   ho_config_set_flag tree_retention_days "$2"; shift 2 ;;
+    --backup-retention) ho_config_set_flag backup_retention_days "$2"; shift 2 ;;
+    --size-confirm)     ho_config_set_flag size_confirm_bytes "$2"; shift 2 ;;
+    --free-warn)        ho_config_set_flag free_space_warn_gib "$2"; shift 2 ;;
+    --older-than)       HO_OLDER_THAN_DAYS="$2"; shift 2 ;;
+    --codex)            HO_RUNTIME="codex"; shift ;;
+    --yes|-y)           HO_ASSUME_YES=1; shift ;;
+    --no)               HO_ASSUME_NO=1; shift ;;
+    --force)            HO_FORCE=1; shift ;;
+    -h|--help)          ho_usage; exit 0 ;;
+    --) shift; while [ $# -gt 0 ]; do args+=("$1"); shift; done ;;
+    -*) ho_err "알 수 없는 옵션: $1"; ho_usage; exit 1 ;;
+    *)  args+=("$1"); shift ;;
+  esac
+done
+
+[ -z "$cmd" ] && cmd="handoff"
+
+case "$cmd" in
+  handoff)
+    instruction="${args[0]:-}"
+    if [ -z "$instruction" ]; then
+      ho_err "지시문이 필요합니다. 예: handoff \"이거 마저 마무리해줘\""
+      exit 1
+    fi
+    ho_cmd_handoff "$instruction"
+    ;;
+  handback)  ho_config_load "$(ho_project_root "$PWD")"; ho_cmd_handback ;;
+  status)    ho_cmd_status ;;
+  clean)     ho_cmd_clean ;;
+  bootstrap) ho_config_load "$(ho_project_root "$PWD")"; ho_cmd_bootstrap ;;
+  candidates)
+    # 스킬이 사람에게 보여줄 후보를 얻는 통로. 판단은 스킬이 한다(D-09).
+    root="$(ho_project_root "$PWD")"; ho_config_load "$root"
+    ho_candidate_list "$root" ;;
+  include|exclude)
+    # 스킬이 사용자의 선택을 굳히는 통로(D-50).
+    root="$(ho_project_root "$PWD")"; ho_config_load "$root"
+    [ ${#args[@]} -gt 0 ] || { ho_err "경로가 필요합니다: handoff $cmd <경로>"; exit 1; }
+    for a in "${args[@]}"; do
+      if [ "$cmd" = "include" ]; then ho_record_include "$root" "$a"; else ho_record_ignore "$root" "$a"; fi
+      ho_say "  $cmd: $a"
+    done ;;
+  *) ho_err "알 수 없는 명령: $cmd"; ho_usage; exit 1 ;;
+esac
