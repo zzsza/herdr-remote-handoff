@@ -8,7 +8,20 @@
 set -o pipefail
 
 # 현재 herdr 에이전트에서 세션 uuid 를 얻는다. 실패하면 빈 문자열.
+# herdr 로 못 찾으면 세션 비컨(리스 가드 훅이 프롬프트 제출마다 기록하는
+# cwd -> session uuid)으로 폴백한다. 일반 터미널에서 시작한 세션도 이것으로 잡힌다.
+# 비컨 값의 uuid 형식과 세션 파일 존재는 호출부가 검증하므로 여기서는 읽기만 한다.
 ho_current_session_uuid() {
+  local cwd="$1" uuid beacon
+  uuid="$(ho_herdr_session_uuid "$cwd")"
+  if [ -z "$uuid" ]; then
+    beacon="$HOME/.local/state/handoff/last-session/${cwd//\//-}"
+    [ -f "$beacon" ] && uuid="$(head -1 "$beacon" 2>/dev/null)"
+  fi
+  printf '%s' "$uuid"
+}
+
+ho_herdr_session_uuid() {
   local cwd="$1"
   command -v herdr >/dev/null 2>&1 || { printf ''; return; }
   herdr agent list 2>/dev/null | python3 -c "
@@ -382,6 +395,8 @@ ho_cmd_handoff() {
 
   local settings="$(ho_remote_tree)/.handoff/claude-settings.json"
   if [ "$runtime" = "claude" ]; then
+    ho_remote_trust_project "$host" "$remote_path" >/dev/null 2>&1 \
+      || ho_warn "폴더 신뢰 선기록 실패. trust 대화상자에서 멈추면 herdr --remote $host 로 붙어 수락하세요."
     if ! ho_remote_agent_start "$host" "$pane" "$label" "$uuid" "$settings" "$instruction"; then
       ho_err "원격 자율 세션 기동에 실패했습니다 (workspace $ws)."
       ho_say "  handoff 재실행 또는 handback 으로 회수하세요."
