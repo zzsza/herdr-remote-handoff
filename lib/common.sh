@@ -131,6 +131,26 @@ ho_shq() {
   printf "'%s'" "$(printf '%s' "$s" | sed "s/'/'\\\\''/g")"
 }
 
+# 원격 에이전트 이름을 herdr 규칙에 맞춰 만든다.
+# ho_agent_label <basename> <hash8>
+#
+# herdr 는 소문자로 시작하고 [a-z0-9_-] 만 쓰는 1-32자 이름만 받는다.
+# basename 을 그대로 붙이면 조금만 길어도 agent start 가 invalid_agent_name 으로
+# 거부해 기동이 통째로 실패한다(실기계 확인: codex-trust-verify, 26자에서 재현).
+# 해시 8자는 같은 이름의 다른 프로젝트를 가르는 유일한 수단이라 줄이지 않는다.
+# 남는 예산 15자에 맞춰 이름 쪽만 자른다.
+ho_agent_label() {
+  local base="$1" tag="$2" slug
+  slug="$(printf '%s' "$base" | LC_ALL=C tr '[:upper:]' '[:lower:]' \
+    | LC_ALL=C sed -e 's/[^a-z0-9_-]/-/g')"
+  slug="${slug:0:15}"
+  # 잘린 끝이 구분자로 끝나면 해시와 붙어 읽기 어렵다. 떼어낸다.
+  slug="${slug%"${slug##*[!-_]}"}"
+  # 이름이 전부 비ASCII 였으면 남는 게 없다. 그때는 해시만으로 구분한다.
+  [ -n "$slug" ] || slug="p"
+  printf 'handoff-%s-%s' "$slug" "$tag"
+}
+
 # 사용자 제공 패턴이 셸에 그대로 들어가도 안전한지 검사한다.
 # 허용: 영숫자, 점, 밑줄, 하이픈, 슬래시, 별표, 물음표, 대괄호.
 ho_is_safe_pattern() {

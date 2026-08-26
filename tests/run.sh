@@ -618,6 +618,68 @@ printf '%s' "$_pf" | grep -q -- '--wait' && ok "전달을 기다려 확인" || b
 printf '%s' "$_pf" | grep -q -- '--until working' && ok "완료가 아니라 착수까지만 기다림" || bad "--until" "working" "없음"
 printf '%s' "$_pf" | grep -q -- '--timeout' && ok "무한 대기하지 않음" || bad "--timeout" "있음" "없음"
 
+group "원격 에이전트 이름 규칙"
+
+# herdr 는 소문자 시작, [a-z0-9_-], 1-32자만 받는다. 어기면 agent start 가 통째로 실패한다.
+_name_ok() {
+  case "$1" in
+    [a-z]*) ;;
+    *) return 1 ;;
+  esac
+  [ "${#1}" -ge 1 ] && [ "${#1}" -le 32 ] || return 1
+  case "$1" in
+    *[!a-z0-9_-]*) return 1 ;;
+  esac
+  return 0
+}
+for _n in app codex-trust-verify salesforce-agentic-ai-fundamentals herdr-remote-handoff \
+          My.App_v2 "한글프로젝트" "a b c" "....."; do
+  _l="$(ho_agent_label "$_n" ae4bdc62)"
+  _name_ok "$_l" && ok "이름 규칙 준수: $_n -> $_l" || bad "이름 규칙: $_n" "규칙 준수" "$_l"
+done
+eq "짧은 이름은 그대로 유지" "handoff-app-ae4bdc62" "$(ho_agent_label app ae4bdc62)"
+eq "해시는 잘리지 않음" "ae4bdc62" "$(ho_agent_label salesforce-agentic-ai-fundamentals ae4bdc62 | sed 's/.*-//')"
+# 같은 이름의 다른 경로를 해시가 가른다. 잘린 뒤에도 그 구분이 남아야 한다.
+_a="$(ho_agent_label very-long-project-name-here 11111111)"
+_b="$(ho_agent_label very-long-project-name-here 22222222)"
+[ "$_a" != "$_b" ] && ok "잘린 뒤에도 경로별로 이름이 다름" || bad "경로 구분" "다름" "$_a"
+
+group "Codex 폴더 신뢰 선기록"
+
+# --dangerously-bypass-approvals-and-sandbox 는 신뢰 대화상자를 건너뛰지 않는다.
+# 그래서 Codex 경로도 Claude 경로처럼 기동 전에 신뢰를 기록해야 한다.
+grep -qF 'ho_remote_trust_codex_project "$host" "$remote_path"' "$ROOT/lib/cmd_handoff.sh" \
+  && ok "Codex 기동 전에 신뢰 선기록이 호출됨" || bad "codex 신뢰 배선" "있음" "없음"
+_ts=$(awk '/^ho_remote_trust_codex_project\(\)/,/^}/' "$ROOT/lib/remote.sh")
+printf '%s' "$_ts" | grep -q 'codex/config.toml' && ok "Codex 신뢰는 config.toml 에 기록" || bad "기록 위치" "config.toml" "다름"
+printf '%s' "$_ts" | grep -q 'os.path.realpath' && ok "심링크 경로와 실경로 둘 다 기록" || bad "실경로" "있음" "없음"
+printf '%s' "$_ts" | grep -q 'O_NOFOLLOW' && ok "신뢰 기록 임시파일 심링크 공격 차단" || bad "심링크 공격" "차단" "미차단"
+
+# 실행 검증: 함수 안의 python 본문을 꺼내 격리된 HOME 에 돌린다.
+_trustpy="$TMPROOT/trust_codex.py"
+printf '%s' "$_ts" | sed -n "/<<'PY'/,/^PY\"$/p" | sed '1d;$d' > "$_trustpy"
+_th="$TMPROOT/codexhome"
+
+# 설정이 없으면 만들어 넣는다
+rm -rf "$_th"; mkdir -p "$_th"
+HOME="$_th" python3 "$_trustpy" /tmp/handoff-trust-case >/dev/null 2>&1
+grep -qF 'trust_level = "trusted"' "$_th/.codex/config.toml" 2>/dev/null \
+  && ok "설정이 없어도 신뢰를 기록" || bad "신규 생성" "trusted" "없음"
+
+# 이미 거절(untrusted) 로 남아 있어도 이번 전송으로 신뢰가 성립한다
+rm -rf "$_th"; mkdir -p "$_th/.codex"
+printf 'model = "x"\n\n[projects."/tmp/handoff-trust-case"]\ntrust_level = "untrusted"\n\n[hooks.state]\nk = 1\n' \
+  > "$_th/.codex/config.toml"
+HOME="$_th" python3 "$_trustpy" /tmp/handoff-trust-case >/dev/null 2>&1
+grep -qF 'trust_level = "untrusted"' "$_th/.codex/config.toml" \
+  && bad "untrusted 교체" "trusted" "untrusted 잔존" || ok "untrusted 였던 항목을 trusted 로 교체"
+eq "기존 설정을 보존" "1" "$(grep -c '^model = "x"' "$_th/.codex/config.toml")"
+
+# 두 번 돌려도 같은 섹션이 중복되지 않는다. TOML 은 섹션 중복이 파싱 오류다.
+HOME="$_th" python3 "$_trustpy" /tmp/handoff-trust-case >/dev/null 2>&1
+eq "재호출해도 섹션이 중복되지 않음" "1" \
+  "$(grep -c '^\[projects\."/tmp/handoff-trust-case"\]$' "$_th/.codex/config.toml")"
+
 printf '\n%s\n' "----------------------------------------"
 printf 'pass %s / fail %s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

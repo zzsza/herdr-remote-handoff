@@ -121,6 +121,41 @@ herdr 가 그 시작 화면의 스피너를 working 으로 오인해, 지시문�
 확인 실패면 넣지 않고 실패를 반환한다(유실된 채 성공 보고보다 exit 5 로 드러나는 쪽이 낫다).
 codex 왕복 재검증으로 확인 완료, 기존 테스트 271개 통과.
 
+## 8. Codex 경로에도 폴더 신뢰 대화상자가 남아 있음
+
+**증상**: `handoff --codex` 로 넘긴 원격 codex 가 `Do you trust the contents of this
+directory?` 화면에서 멈춘다. 사람이 붙어 엔터를 누르기 전까지 지시문이 들어가지 않는다.
+
+**원인**: 5번과 같은 문제가 Codex 경로에 남아 있었다. `--dangerously-bypass-approvals-and-sandbox`
+는 승인 정책과 샌드박스만 끄고 폴더 신뢰 화면은 건너뛰지 않는다(codex-cli 0.149.1 에서
+빈 디렉터리로 재현). 5번에서 넣은 `ho_remote_trust_project` 는 claude 분기에서만 호출되고,
+Codex 의 신뢰 기록은 `~/.claude.json` 이 아니라 `~/.codex/config.toml` 의
+`[projects."<경로>"] trust_level` 이라 그대로는 통하지 않는다.
+
+**적용한 수정 (이 저장소에 구현)**: `lib/remote.sh` 에 `ho_remote_trust_codex_project` 추가.
+기동 전에 원격 `~/.codex/config.toml` 에 심링크 경로와 실경로 둘 다 `trust_level = "trusted"`
+를 기록한다. TOML 은 같은 섹션이 두 번 나오면 파싱 오류라서, 섹션이 이미 있으면 그 안의
+`trust_level` 만 바꾸고 없을 때만 붙인다. 전에 거절해 `untrusted` 로 남아 있어도 trusted 로
+덮는다. 이번 전송으로 신뢰 판단이 새로 성립하기 때문이다. 실패 시 경고만 하고 기동은 계속한다.
+`lib/cmd_handoff.sh` 의 codex 기동 직전에 호출. codex 왕복으로 검증 완료.
+
+## 9. 원격 에이전트 이름이 길면 기동이 통째로 실패함
+
+**증상**: `handoff` 가 workspace 는 만들고 나서
+`{"error":{"code":"invalid_agent_name","message":"agent name must start with a lowercase
+letter and contain only lowercase letters, digits, '-' or '_' (1-32 characters)"}}` 로
+기동에 실패한다(exit 5).
+
+**원인**: 에이전트 이름을 `handoff-<basename>-<해시8>` 로 만드는데 고정부만 17자다.
+프로젝트 이름이 15자를 넘으면 herdr 의 32자 제한을 넘긴다. 대문자나 점이 들어간 이름도
+문자 규칙에 걸린다. workspace 라벨에는 같은 제한이 없어서 workspace 만 남고 에이전트가
+없는 상태가 된다. `herdr-remote-handoff`(19자) 자신도 걸리는 흔한 조건이다.
+
+**적용한 수정 (이 저장소에 구현)**: `lib/common.sh` 에 `ho_agent_label` 추가. 소문자화하고
+허용 문자 밖은 `-` 로 바꾼 뒤, 이름 쪽만 15자로 자른다. 해시 8자는 같은 이름의 다른
+프로젝트를 가르는 유일한 수단이라 줄이지 않는다. 잘린 끝의 구분자는 떼고, 남는 글자가
+없으면(전부 비ASCII) 해시만으로 구분한다.
+
 ## 참고: 로컬 herdr "선택" 의 체감
 
 README 대로 선택 사항이 맞지만, herdr pane 밖(일반 터미널)에서 띄운 Claude 세션은

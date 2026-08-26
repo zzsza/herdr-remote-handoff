@@ -186,6 +186,70 @@ os.replace(tmp, cfg)
 PY"
 }
 
+# Codex 폴더 신뢰 선기록.
+# Claude 의 ho_remote_trust_project 와 같은 문제가 Codex 경로에도 있다.
+# --dangerously-bypass-approvals-and-sandbox 는 승인과 샌드박스만 끄고 폴더 신뢰
+# 대화상자(Do you trust the contents of this directory?)는 건너뛰지 않는다(codex-cli
+# 0.149 에서 재현 확인). 그 화면에서 기동이 멈추면 지시문이 신뢰 선택지에 들어가거나
+# idle 대기가 타임아웃돼 exit 5 가 된다.
+# Codex 의 신뢰 기록은 ~/.codex/config.toml 의 [projects."<경로>"] trust_level 이다.
+# 방금 로컬에서 전송한 트리라 신뢰 판단은 이미 성립했으므로 기동 전에 기록한다.
+# Codex 는 cwd 를 실경로로 정규화해 기록하지만 세션은 심링크 경로로 뜨므로 둘 다 넣는다.
+# 실패해도 기동은 계속한다. 그 경우 종전처럼 신뢰 대화상자에서 멈출 뿐이다.
+ho_remote_trust_codex_project() {
+  local host="$1" path="$2"
+  ho_ssh "$host" "python3 - $(ho_shq "$path") <<'PY'
+import os, sys
+
+path = sys.argv[1]
+cfg = os.path.expanduser('~/.codex/config.toml')
+paths = {path, os.path.realpath(path)}
+
+lines = []
+if os.path.exists(cfg):
+    with open(cfg, encoding='utf-8') as f:
+        lines = f.read().splitlines()
+
+def esc(p):
+    return p.replace('\\\\', '\\\\\\\\').replace('\"', '\\\\\"')
+
+for p in sorted(paths):
+    header = '[projects.\"%s\"]' % esc(p)
+    try:
+        i = next(n for n, l in enumerate(lines) if l.strip() == header)
+    except StopIteration:
+        # 섹션이 없으면 파일 끝에 붙인다. TOML 은 같은 섹션이 두 번 나오면
+        # 파싱 오류라서, 반드시 없을 때만 붙여야 한다.
+        if lines and lines[-1].strip():
+            lines.append('')
+        lines += [header, 'trust_level = \"trusted\"', '']
+        continue
+    # 섹션은 있다. 그 안의 trust_level 만 바꾼다. 사용자가 전에 거절해
+    # untrusted 로 남아 있어도 이번 전송으로 신뢰 판단이 새로 성립한다.
+    end = len(lines)
+    for n in range(i + 1, len(lines)):
+        if lines[n].lstrip().startswith('['):
+            end = n
+            break
+    for n in range(i + 1, end):
+        if lines[n].split('=')[0].strip() == 'trust_level':
+            lines[n] = 'trust_level = \"trusted\"'
+            break
+    else:
+        lines.insert(i + 1, 'trust_level = \"trusted\"')
+
+os.makedirs(os.path.dirname(cfg), exist_ok=True)
+tmp = cfg + '.handoff-tmp'
+# 고정 경로의 임시 파일이 심링크면 그 대상을 잘라버린다. 지우고 배타 생성한다.
+if os.path.islink(tmp) or os.path.exists(tmp):
+    os.unlink(tmp)
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+with os.fdopen(fd, 'w') as f:
+    f.write('\n'.join(lines) + '\n')
+os.replace(tmp, cfg)
+PY"
+}
+
 # 자율 세션 기동 (D-17, D-18, D-41).
 # ho_remote_agent_start <host> <pane_id> <name> <session_uuid> <settings_path> <prompt>
 # -p 로 띄우면 안 된다. 헤드리스 1회 실행이라 끝나면 대화가 남지 않고,

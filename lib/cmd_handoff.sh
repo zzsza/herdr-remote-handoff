@@ -369,7 +369,7 @@ ho_cmd_handoff() {
   # basename 만 쓰면 같은 이름의 다른 프로젝트와 충돌해 엉뚱한 에이전트를 조회/정지한다.
   local label path_tag
   path_tag="$(printf '%s' "$root" | shasum | cut -c1-8)"
-  label="handoff-$(basename "$root")-$path_tag"
+  label="$(ho_agent_label "$(basename "$root")" "$path_tag")"
   ws="$(ho_remote_ws_create "$host" "$remote_path" "$label")"
   if [ -z "$ws" ]; then
     ho_err "원격 workspace 생성에 실패했습니다."
@@ -403,6 +403,8 @@ ho_cmd_handoff() {
       exit 5
     fi
   else
+    ho_remote_trust_codex_project "$host" "$remote_path" >/dev/null 2>&1 \
+      || ho_warn "Codex 폴더 신뢰 선기록 실패. 신뢰 대화상자에서 멈추면 herdr --remote $host 로 붙어 수락하세요."
     if ! ho_remote_codex_start "$host" "$pane" "$label" "$instruction"; then
       ho_err "원격 Codex 세션 기동에 실패했습니다 (workspace $ws)."
       exit 5
