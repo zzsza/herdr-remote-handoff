@@ -104,18 +104,25 @@ ho_is_secret() {
   ho_matches_any "$path" "${pats[@]}"
 }
 
+# 경로 목록을 한 프로세스에서 거른다 (issue #1).
+# 파일마다 ho_is_included/ho_is_excluded 서브셸을 띄우면 무시 파일이 수만 개인
+# 프로젝트에서 스캔이 분 단위로 걸린다. 단일 경로 판정은 기존 함수를 그대로 쓴다.
+_ho_filter_paths() {
+  local root="$1" mode="$2"
+  HO_PF_INCLUDE="$(ho_include_patterns "$root")" \
+  HO_PF_EXCLUDE="$(ho_exclude_patterns "$root")" \
+    python3 "$_HO_LIB_DIR/path_filter.py" "$mode"
+}
+
 # ho_transfer_list <root>
 # 전송할 상대경로를 정렬해 출력한다.
 ho_transfer_list() {
-  local root="$1" f
+  local root="$1"
   {
     if _ho_is_git_repo "$root"; then
       _ho_git_visible "$root"
       # 무시되지만 포함 목록에 걸린 것은 되살린다
-      while IFS= read -r f; do
-        [ -z "$f" ] && continue
-        ho_is_included "$root" "$f" && printf '%s\n' "$f"
-      done < <(_ho_git_ignored "$root")
+      _ho_git_ignored "$root" | _ho_filter_paths "$root" include-only
       # .git 자체는 포함 (D-08)
       if [ -d "$root/.git" ]; then
         (cd "$root" && find .git -type f -print 2>/dev/null) || true
@@ -123,28 +130,18 @@ ho_transfer_list() {
     else
       _ho_plain_files "$root"
     fi
-  } | while IFS= read -r f; do
-        [ -z "$f" ] && continue
-        ho_is_excluded "$root" "$f" && continue
-        printf '%s\n' "$f"
-      done | LC_ALL=C sort -u
+  } | _ho_filter_paths "$root" not-excluded | LC_ALL=C sort -u
 }
 
 # ho_candidate_list <root>
 # 최초 handoff에서 사람에게 보여줄 후보: 무시되는데 포함도 제외도 결정되지 않은 것.
 # 출력은 "<bytes>\t<path>" 이며 큰 것부터.
 ho_candidate_list() {
-  local root="$1" f
+  local root="$1"
   _ho_is_git_repo "$root" || return 0
-  # 용량 조회도 일괄 처리한다. 파일당 프로세스를 띄우면 무시 파일이 많을 때 멈춘다.
-  {
-    while IFS= read -r f; do
-      [ -z "$f" ] && continue
-      ho_is_excluded "$root" "$f" && continue
-      ho_is_included "$root" "$f" && continue
-      printf '%s\n' "$f"
-    done < <(_ho_git_ignored "$root")
-  } | python3 -c "
+  # 매칭과 용량 조회 모두 일괄 처리한다. 파일당 프로세스를 띄우면 무시 파일이
+  # 많을 때 멈춘다 (issue #1).
+  _ho_git_ignored "$root" | _ho_filter_paths "$root" candidates | python3 -c "
 import os,sys
 root=sys.argv[1]
 rows=[]

@@ -155,6 +155,18 @@ eq "중복 기록 안 함" "1" "$(grep -cx 'big.bin' "$P/.handoffinclude")"
 ho_config_reset; ho_config_load "$P"
 grep -qx 'big.bin' <<< "$(ho_transfer_list "$P")" && ok "선택분이 다음 회차에 전송됨" || bad "선택 반영" "big.bin 포함" "없음"
 
+# 슬래시 포함 패턴으로 무시 디렉터리 안의 파일을 되살린다 (path_filter 경로 매칭).
+# node_modules 는 고정 제외라 include 로도 못 살리므로, 제외 목록에 없는 무시
+# 디렉터리로 검증한다.
+printf 'data/\n' >> "$P/.gitignore"
+mkdir -p "$P/data" && printf 'db\n' > "$P/data/app.db" && printf 'log\n' > "$P/data/app.log"
+ho_record_include "$P" "data/app.db"
+ho_config_reset; ho_config_load "$P"
+LN="$(ho_transfer_list "$P")"
+grep -qx 'data/app.db' <<< "$LN" && ok "경로 패턴 include 가 무시 디렉터리 안 파일을 되살림" || bad "경로 패턴 include" "data/app.db" "없음"
+grep -qx 'data/app.log' <<< "$LN" && bad "형제 파일은 그대로 제외" "없음" "있음" || ok "include 안 된 형제 파일은 그대로 제외"
+grep -qx 'node_modules/pkg/index.js' <<< "$(ho_record_include "$P" "node_modules/pkg/index.js"; ho_config_reset; ho_config_load "$P"; ho_transfer_list "$P")" && bad "고정 제외가 include 를 이김" "없음" "있음" || ok "고정 제외(node_modules)는 include 로도 못 살림"
+
 # ---------------------------------------------------------------- 시크릿 분류
 group "시크릿 분류 (R7/AC7) - .env* 만 시크릿"
 
