@@ -114,7 +114,7 @@ Codex 세션은 sqlite 여러 테이블에 분산 저장돼서 대화 히스토�
 | `remote_tree_target` | `--remote-tree-target` | (비움) | 원격에서 그 경로가 가리킬 실제 디렉터리. 비우면 원격 홈을 조회해 `<원격 홈>/.handoff-tree` 로 파생 |
 | `deny_extra` | `--deny-extra` | (비움) | 원격 자율 세션에서 추가로 차단할 경로. 콤마 구분 |
 | `include` | `--include` | `.env*,*.local.json,.claude/settings.local.json,*.sqlite,*.db` | gitignore 돼도 전송할 패턴 |
-| `exclude` | `--exclude` | `node_modules,.venv,__pycache__,dist,build,.next,.DS_Store` | 항상 제외할 패턴 |
+| `exclude` | `--exclude` | `node_modules,.venv,venv,__pycache__,.pytest_cache,.mypy_cache,.ruff_cache,.tox,.nox,.eggs,.ipynb_checkpoints,.cache,.turbo,.parcel-cache,.pnpm-store,coverage,target,.gradle,.bundle,Pods,DerivedData,Carthage,.build,_build,.stack-work,zig-cache,zig-out,.terraform,dist,build,.next,.nuxt,.svelte-kit,.DS_Store` | 항상 제외할 패턴 |
 | `secrets` | `--secrets` | `.env*` | 회수 직후 원격에서 지울 패턴 |
 | `tree_retention_days` | `--tree-retention` | `14` | 원격 트리 보존 일수 |
 | `backup_retention_days` | `--backup-retention` | `7` | 백업 보존 일수 |

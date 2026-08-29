@@ -23,7 +23,7 @@ ho_config_defaults() {
   # 운영 자산을 지키기 위한 것으로, 기본은 비어 있다.
   HO_DEFAULT_deny_extra=""
   HO_DEFAULT_include=".env*,*.local.json,.claude/settings.local.json,*.sqlite,*.db"
-  HO_DEFAULT_exclude="node_modules,.venv,__pycache__,dist,build,.next,.DS_Store"
+  HO_DEFAULT_exclude="node_modules,.venv,venv,__pycache__,.pytest_cache,.mypy_cache,.ruff_cache,.tox,.nox,.eggs,.ipynb_checkpoints,.cache,.turbo,.parcel-cache,.pnpm-store,coverage,target,.gradle,.bundle,Pods,DerivedData,Carthage,.build,_build,.stack-work,zig-cache,zig-out,.terraform,dist,build,.next,.nuxt,.svelte-kit,.DS_Store"
   HO_DEFAULT_secrets=".env*"
   HO_DEFAULT_tree_retention_days="14"
   HO_DEFAULT_backup_retention_days="7"
